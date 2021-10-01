@@ -40,4 +40,8 @@
         fastcgi_param HTTPS {{ (project['docker']['ssl']['enabled'] | default(false)) ? 'on' : 'off' }};
 {% endblock location %}
     }
+
+    location /stub_status {
+        stub_status;
+    }
 {% endblock locations %}
