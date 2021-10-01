@@ -14,7 +14,7 @@ RUN chmod +x /entrypoint.sh
 
 ENV SPRYKER_DNS_RESOLVER_FLAGS="valid=10s ipv6=off"
 #ENV SPRYKER_DNS_RESOLVER_IP="127.0.0.11"
-ENV SPRYKER_DNS_RESOLVER_IP="kube-dns.kube-system"
+ENV SPRYKER_DNS_RESOLVER_IP="kube-dns.kube-system.svc.cluster.local"
 
 # Build info
 ARG SPRYKER_BUILD_HASH='current'
