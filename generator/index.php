@@ -23,12 +23,17 @@ if ($projectYaml == '') {
 
 $defaultDeploymentDir = getenv('SPRYKER_DOCKER_SDK_DEPLOYMENT_DIR') ?: './';
 $platform = getenv('SPRYKER_DOCKER_SDK_PLATFORM') ?: 'linux'; // Possible values: linux windows macos
+$platformComposeArg = getenv('SPRYKER_DOCKER_SDK_PLATFORM_COMPOSE_ARG') ?: ''; // Possible values: "platform: linux/arm64/v8" | empty
+$platformIsArm = getenv('SPRYKER_DOCKER_SDK_PLATFORM_IS_ARM') ?: 0;
 
 $loaders = new ChainLoader([
     new FilesystemLoader(APPLICATION_SOURCE_DIR . DS . 'templates'),
     new FilesystemLoader($deploymentDir),
 ]);
-$twig = new Environment($loaders);
+
+$twig = new Environment($loaders, ['debug' => true]);
+$twig->addExtension(new \Twig\Extension\DebugExtension());
+
 $nginxVarEncoder = new class() {
     public function encode($value)
     {
@@ -74,6 +79,10 @@ $yamlParser = new Parser();
 
 $projectData = $yamlParser->parseFile($projectYaml);
 
+$projectData['_platformCompose'] = $platformComposeArg;
+$projectData['_isArm'] = $platformIsArm;
+$projectData['_timeOut'] = isDevelopmentMode($projectData) ? '5m' : '1m';
+updateImageDependOnPlatform($projectData);
 $projectData['_knownHosts'] = buildKnownHosts($deploymentDir);
 $projectData['_defaultDeploymentDir'] = $defaultDeploymentDir;
 $projectData['tag'] = $projectData['tag'] ?? uniqid();
@@ -110,8 +119,8 @@ if (empty($projectData['services']['webdriver'])) {
 $projectData['_dashboardEndpoint'] = '';
 if (!empty($projectData['services']['dashboard'])) {
     $projectData['services']['dashboard']['endpoints'] = $projectData['services']['dashboard']['endpoints'] ?? [
-            'localhost' => []
-        ];
+        'localhost' => []
+    ];
     reset($projectData['services']['dashboard']['endpoints']);
     $projectData['_dashboardEndpoint'] = sprintf(
         '%s://%s',
@@ -231,6 +240,58 @@ $frontend = [];
 $environment = [
     'project' => $projectData['namespace'],
 ];
+
+/**
+ * @param array $projectData
+ * @return bool
+ */
+function isDevelopmentMode(array $projectData): bool
+{
+    return ($projectData['assets']['mode'] ?? 'production') == 'development';
+}
+
+/**
+ * Update script execution time in case of development mode
+ * @param bool   $isDevelopmentMode
+ * @param string $deploymentDir
+ */
+function updateExecutionTime(bool $isDevelopmentMode, string $deploymentDir)
+{
+    if (!$isDevelopmentMode) {
+        return;
+    }
+
+    $config = [
+        $deploymentDir . DS . 'context' . DS . 'php' . DS . 'php.ini' => ['max_execution_time' => 180],
+        $deploymentDir . DS . 'context' . DS . 'php' . DS . 'php-fpm.d' . DS . 'worker.conf' => ['request_terminate_timeout' => '5m'],
+    ];
+
+    foreach ($config as $file => $correction) {
+        $content = file_get_contents($file);
+        foreach ($correction as $property => $replacement) {
+            $content = preg_replace("(${property}.*)", "${property} = ${replacement}", $content);
+        }
+        file_put_contents($file, $content);
+    }
+}
+
+/**
+ * Replace base image depends on platform
+ *
+ * @param array $projectData
+ */
+function updateImageDependOnPlatform(array &$projectData)
+{
+    if (empty($projectData['_isArm'])) {
+        return;
+    }
+
+    if (is_array($projectData['image'])) {
+        $projectData['image']['tag'] = str_replace('spryker', 'volhovm', $projectData['image']['tag']);
+        return;
+    }
+    $projectData['image'] = str_replace('spryker', 'volhovm', $projectData['image']);
+}
 
 /**
  * @param array $endpointMap
@@ -445,6 +506,8 @@ file_put_contents(
     $twig->render('php/conf.d/99-from-deploy-yaml-php.ini.twig', $projectData)
 );
 
+updateExecutionTime(isDevelopmentMode($projectData), $deploymentDir);
+
 $envVarEncoder->setIsActive(true);
 file_put_contents(
     $deploymentDir . DS . 'terraform/environment.tf',
@@ -532,7 +595,7 @@ function retrieveMountMode(array $projectData, string $platform): string
 {
     $mountMode = 'baked';
     foreach ($projectData['docker']['mount'] ?? [] as $engine => $configuration) {
-        if (in_array($platform, $configuration['platforms'] ?? [$platform], true)) {
+    if (in_array($platform, $configuration['platforms'] ?? [$platform], true)) {
             $mountMode = $engine;
             break;
         }
